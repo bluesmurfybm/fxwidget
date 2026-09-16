@@ -1,0 +1,6 @@
+build/
+dist/
+build_mac/
+dist_mac/
+fxwidget.json
+__pycache__/
