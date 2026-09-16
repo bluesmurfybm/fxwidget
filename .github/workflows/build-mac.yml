@@ -12,7 +12,7 @@ jobs:
         include:
           - os: macos-14      # Apple Silicon (M1 이후)
             arch: arm64
-          - os: macos-13      # Intel
+          - os: macos-15-intel  # Intel (macos-13은 퇴역됨)
             arch: intel
     runs-on: ${{ matrix.os }}
     steps:
