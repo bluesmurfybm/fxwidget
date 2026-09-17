@@ -6,7 +6,11 @@
 """
 import tkinter as tk
 from tkinter import colorchooser, font as tkfont
-import requests, threading, json, os, sys, time
+import requests, threading, json, os, sys, time, urllib.request
+# 학교/회사망의 SSL 검사 장비 대응: OS 인증서 저장소를 사용 (없으면 무시)
+try:
+    import truststore; truststore.inject_into_ssl()
+except Exception: pass
 try:
     import ctypes
     _user32 = ctypes.windll.user32 if sys.platform == "win32" else None
@@ -287,7 +291,18 @@ class FxWidget(tk.Tk):
 
     def _proxies(self):
         p = self.cfg.get("proxy") or ""
-        return {"http": p, "https": p} if p else None
+        if p: return {"http": p, "https": p}
+        return None   # None이면 requests가 Windows 시스템 프록시(레지스트리)를 자동 사용
+
+    def _get(self, url):
+        """GET JSON. SSL 검증 실패 시 검증 없이 1회 재시도 (SSL 인스펙션 망 대응)"""
+        kw = dict(headers=HDR, timeout=10, proxies=self._proxies())
+        try:
+            return requests.get(url, **kw).json()
+        except requests.exceptions.SSLError:
+            import urllib3; urllib3.disable_warnings()
+            self._insecure = True
+            return requests.get(url, verify=False, **kw).json()
 
     def _fetch(self):
         res, errs = {}, []
@@ -295,7 +310,7 @@ class FxWidget(tk.Tk):
         # 1차: 네이버 금융(하나은행 고시, 장중 수시 갱신)
         for n, code in want:
             try:
-                j = requests.get(URL.format(code), headers=HDR, timeout=10, proxies=self._proxies()).json()["exchangeInfo"]
+                j = self._get(URL.format(code))["exchangeInfo"]
                 res[n] = float(j["closePrice"].replace(",", ""))
             except Exception as ex:
                 errs.append(f"naver {n} {type(ex).__name__}: {ex}")
@@ -303,7 +318,7 @@ class FxWidget(tk.Tk):
         src = "naver"
         if want and not res:
             try:
-                r = requests.get(FALLBACK_URL, headers=HDR, timeout=10, proxies=self._proxies()).json()["rates"]
+                r = self._get(FALLBACK_URL)["rates"]
                 for n, _ in want:
                     res[n] = (100 if n in UNIT100 else 1) / r[n]
                 src = "fallback"
@@ -313,6 +328,9 @@ class FxWidget(tk.Tk):
             with open(LOG, "w", encoding="utf-8") as f:
                 f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} source={src} ok={sorted(res)}\n")
                 for e in errs: f.write(e + "\n")
+                f.write(f"system_proxy={urllib.request.getproxies()} cfg_proxy={self.cfg.get('proxy')!r} "
+                        f"insecure_retry={getattr(self, '_insecure', False)}\n")
+                if errs: f.write("힌트: 학교망 프록시가 있으면 fxwidget.json 의 proxy 에 http://주소:포트 를 넣으세요\n")
         except Exception: pass
         self.after(0, self._show, res, errs if not res else None, src)
 
