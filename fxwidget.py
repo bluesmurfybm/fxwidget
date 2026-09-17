@@ -338,6 +338,7 @@ class FxWidget(tk.Tk):
         for name, fn in (("relay", self._src_relay), ("naver", self._src_naver),
                          ("er-api", self._src_erapi), ("frankfurter", self._src_frankfurter)):
             if not want: break
+            if name == "relay" and not (self.cfg.get("relay_url") or "").strip(): continue
             try:
                 res = fn(want)
                 if res: src = name; break
