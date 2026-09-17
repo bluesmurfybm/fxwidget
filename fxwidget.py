@@ -22,10 +22,13 @@ IS_WIN = sys.platform == "win32"
 IS_MAC = sys.platform == "darwin"
 FONT = "Consolas" if IS_WIN else "Menlo"
 URL = "https://api.stock.naver.com/marketindex/exchange/{}"
+FALLBACK_URL = "https://open.er-api.com/v6/latest/KRW"   # 네이버 차단 시 대체(일 1회 갱신)
+UNIT100 = {"JPY", "VND"}   # 100단위 고시 통화
 HDR = {"User-Agent": "Mozilla/5.0"}
 # exe(PyInstaller)로 실행 시 exe 옆, 스크립트 실행 시 스크립트 옆에 설정 저장
 _BASE = os.path.dirname(sys.executable if getattr(sys, "frozen", False) else os.path.abspath(__file__))
 CFG = os.path.join(_BASE, "fxwidget.json")
+LOG = os.path.join(_BASE, "fxwidget.log")
 if IS_WIN:
     STARTUP_LNK = os.path.join(os.environ.get("APPDATA", ""), r"Microsoft\Windows\Start Menu\Programs\Startup", "fxwidget.lnk")
 else:
@@ -42,6 +45,7 @@ DEFAULT_COLORS = {"USD": "#ea835b", "JPY": "#ffb74d", "EUR": "#81c784", "CNY": "
 DEFAULT = {
     "geometry": "143x75", "bg": "#404040", "fg": "#dddddd", "stat": "#888888", "alpha": 0.8,
     "show": ["USD", "JPY"], "show_time": True, "colors": DEFAULT_COLORS, "bold": True,
+    "proxy": "",   # 예: "http://proxy.school.ac.kr:8080"  (비우면 Windows 시스템 프록시 자동 사용)
 }
 
 class FxWidget(tk.Tk):
@@ -281,21 +285,42 @@ class FxWidget(tk.Tk):
     def refresh_now(self):
         threading.Thread(target=self._fetch, daemon=True).start()
 
+    def _proxies(self):
+        p = self.cfg.get("proxy") or ""
+        return {"http": p, "https": p} if p else None
+
     def _fetch(self):
-        res, err = {}, None
-        for n, code in CURRENCIES:
-            if n not in self.cfg["show"]: continue
+        res, errs = {}, []
+        want = [(n, c) for n, c in CURRENCIES if n in self.cfg["show"]]
+        # 1차: 네이버 금융(하나은행 고시, 장중 수시 갱신)
+        for n, code in want:
             try:
-                j = requests.get(URL.format(code), headers=HDR, timeout=10).json()["exchangeInfo"]
+                j = requests.get(URL.format(code), headers=HDR, timeout=10, proxies=self._proxies()).json()["exchangeInfo"]
                 res[n] = float(j["closePrice"].replace(",", ""))
             except Exception as ex:
-                err = ex
-        self.after(0, self._show, res, err)
+                errs.append(f"naver {n} {type(ex).__name__}: {ex}")
+        # 2차: 네이버 전체 실패 시 대체 서버
+        src = "naver"
+        if want and not res:
+            try:
+                r = requests.get(FALLBACK_URL, headers=HDR, timeout=10, proxies=self._proxies()).json()["rates"]
+                for n, _ in want:
+                    res[n] = (100 if n in UNIT100 else 1) / r[n]
+                src = "fallback"
+            except Exception as ex:
+                errs.append(f"fallback {type(ex).__name__}: {ex}")
+        try:
+            with open(LOG, "w", encoding="utf-8") as f:
+                f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} source={src} ok={sorted(res)}\n")
+                for e in errs: f.write(e + "\n")
+        except Exception: pass
+        self.after(0, self._show, res, errs if not res else None, src)
 
-    def _show(self, res, err):
+    def _show(self, res, err, src="naver"):
         for n, v in res.items():
             self.texts[n] = f"{n} {v:,.2f}{self._arrow(n, v)}"
-        self.stat_text = time.strftime("%H:%M:%S") + ("  오류" if err else "")
+        tag = "  오류" if err else ("  *대체" if src == "fallback" else "")
+        self.stat_text = time.strftime("%H:%M:%S") + tag
         self._draw()
 
     def _arrow(self, k, v):
