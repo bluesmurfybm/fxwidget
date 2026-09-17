@@ -50,6 +50,7 @@ DEFAULT = {
     "geometry": "143x75", "bg": "#404040", "fg": "#dddddd", "stat": "#888888", "alpha": 0.8,
     "show": ["USD", "JPY"], "show_time": True, "colors": DEFAULT_COLORS, "bold": True,
     "proxy": "",   # 예: "http://proxy.school.ac.kr:8080"  (비우면 Windows 시스템 프록시 자동 사용)
+    "relay_url": "",   # 예: "https://내도메인/fxrelay/fx.php"  (relay/fx.php 를 회사 서버에 올린 주소)
 }
 
 class FxWidget(tk.Tk):
@@ -304,26 +305,44 @@ class FxWidget(tk.Tk):
             self._insecure = True
             return requests.get(url, verify=False, **kw).json()
 
+    # ---- 소스별 조회 (각각 {name: value} 반환, 실패 시 예외) ----
+    def _src_relay(self, want):
+        """직접 운영하는 중계 서버(relay/fx.php). 설정 relay_url 이 있을 때만"""
+        base = (self.cfg.get("relay_url") or "").strip()
+        if not base: raise RuntimeError("relay_url 미설정")
+        j = self._get(base + ("&" if "?" in base else "?") + "codes=" + ",".join(c for _, c in want))
+        return {n: float(j[c]) for n, c in want if c in j}
+
+    def _src_naver(self, want):
+        res = {}
+        for n, code in want:
+            j = self._get(URL.format(code))["exchangeInfo"]
+            res[n] = float(j["closePrice"].replace(",", ""))
+        return res
+
+    def _src_erapi(self, want):
+        r = self._get(FALLBACK_URL)["rates"]
+        return {n: (100 if n in UNIT100 else 1) / r[n] for n, _ in want if n in r}
+
+    def _src_frankfurter(self, want):
+        """ECB 기준 일 1회 갱신, 도메인이 달라 차단 회피용"""
+        syms = ",".join(n for n, _ in want)
+        r = self._get(f"https://api.frankfurter.app/latest?from=KRW&to={syms}")["rates"]
+        return {n: (100 if n in UNIT100 else 1) / r[n] for n, _ in want if n in r}
+
     def _fetch(self):
         res, errs = {}, []
         want = [(n, c) for n, c in CURRENCIES if n in self.cfg["show"]]
-        # 1차: 네이버 금융(하나은행 고시, 장중 수시 갱신)
-        for n, code in want:
+        src = "none"
+        # 순서: 중계서버(설정 시) → 네이버 → er-api → frankfurter. 하나라도 값이 나오면 중단
+        for name, fn in (("relay", self._src_relay), ("naver", self._src_naver),
+                         ("er-api", self._src_erapi), ("frankfurter", self._src_frankfurter)):
+            if not want: break
             try:
-                j = self._get(URL.format(code))["exchangeInfo"]
-                res[n] = float(j["closePrice"].replace(",", ""))
+                res = fn(want)
+                if res: src = name; break
             except Exception as ex:
-                errs.append(f"naver {n} {type(ex).__name__}: {ex}")
-        # 2차: 네이버 전체 실패 시 대체 서버
-        src = "naver"
-        if want and not res:
-            try:
-                r = self._get(FALLBACK_URL)["rates"]
-                for n, _ in want:
-                    res[n] = (100 if n in UNIT100 else 1) / r[n]
-                src = "fallback"
-            except Exception as ex:
-                errs.append(f"fallback {type(ex).__name__}: {ex}")
+                errs.append(f"{name} {type(ex).__name__}: {str(ex)[:120]}")
         try:
             with open(LOG, "w", encoding="utf-8") as f:
                 f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} source={src} ok={sorted(res)}\n")
@@ -337,7 +356,7 @@ class FxWidget(tk.Tk):
     def _show(self, res, err, src="naver"):
         for n, v in res.items():
             self.texts[n] = f"{n} {v:,.2f}{self._arrow(n, v)}"
-        tag = "  오류" if err else ("  *대체" if src == "fallback" else "")
+        tag = "  오류" if err else ("" if src in ("naver", "relay") else "  *대체")
         self.stat_text = time.strftime("%H:%M:%S") + tag
         self._draw()
 
