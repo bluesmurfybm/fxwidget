@@ -50,7 +50,7 @@ DEFAULT = {
     "geometry": "143x75", "bg": "#404040", "fg": "#dddddd", "stat": "#888888", "alpha": 0.8,
     "show": ["USD", "JPY"], "show_time": True, "colors": DEFAULT_COLORS, "bold": True,
     "proxy": "",   # 예: "http://proxy.school.ac.kr:8080"  (비우면 Windows 시스템 프록시 자동 사용)
-    "relay_url": "",   # 예: "https://내도메인/fxrelay/fx.php"  (relay/fx.php 를 회사 서버에 올린 주소)
+    "relay_url": "https://mnbbnmhj.dothome.co.kr/fx/fx.php",   # relay/fx.php 를 올린 중계 서버 (비우면 네이버 직접 접속)
 }
 
 class FxWidget(tk.Tk):
